@@ -19,12 +19,6 @@
 	var/stage_prob = 2
 	/// How long this infection incubates (non-visible) before revealing itself
 	var/incubation_time
-	/// Has the virus hit its limit?
-	var/stage_peaked = FALSE
-	/// How many cycles has the virus been at its peak?
-	var/peaked_cycles = 0
-	/// How many cycles do we need to have been active after hitting our max stage to start rolling back?
-	var/cycles_to_beat = 0
 
 	//Other
 	var/list/viable_mobtypes = list() //typepaths of viable mobs
@@ -90,90 +84,12 @@
 		if(disease_flags & CURABLE && SPT_PROB(cure_chance, seconds_per_tick))
 			cure()
 			return FALSE
-	else if(SPT_PROB(stage_prob*slowdown, seconds_per_tick))
-		update_stage(min(stage + 1, max_stages))
 
 	if(stage == max_stages && stage_peaked != TRUE) //mostly a sanity check in case we manually set a virus to max stages
 		stage_peaked = TRUE
 
-	if(stage_peaked && !disease_flags & CHRONIC && disease_flags & CURABLE)
-		if(stage == max_stages) //every cycle we spend at max stage counts towards eventually curing the virus
-			peaked_cycles += 1
-		switch(severity)
-			if(DISEASE_SEVERITY_POSITIVE) //good viruses don't go anywhere after hitting max stage unless you try to get rid of them by sleeping
-				cycles_to_beat = DISEASE_CYCLES_POSITIVE
-				if(affected_mob.satiety > 0)
-					return
-			if(DISEASE_SEVERITY_NONTHREAT)
-				cycles_to_beat = DISEASE_CYCLES_NONTHREAT
-			if(DISEASE_SEVERITY_MINOR)
-				cycles_to_beat = DISEASE_CYCLES_MINOR
-			if(DISEASE_SEVERITY_MEDIUM)
-				cycles_to_beat = DISEASE_CYCLES_MEDIUM
-			if(DISEASE_SEVERITY_DANGEROUS)
-				cycles_to_beat = DISEASE_CYCLES_DANGEROUS
-			if(DISEASE_SEVERITY_BIOHAZARD)
-				cycles_to_beat = DISEASE_CYCLES_BIOHAZARD
-	if(!disease_flags & CHRONIC || disease_flags & CURABLE)
-		if(peaked_cycles > cycles_to_beat)
-			recovery_prob += 1
-			if(slowdown) //using antibiotics after somebody's basically peaked out can help get them over the finish line to kill a virus
-				recovery_prob += (slowdown - 1)
-		if(affected_mob.satiety < 0) //being malnourished makes it a lot harder to defeat your illness
-			recovery_prob += -0.8
-		if(affected_mob.mob_mood) // this and most other modifiers below a shameless rip from sleeping healing buffs, but feeling good helps make it go away quicker
-			switch(affected_mob.mob_mood.sanity_level)
-				if(SANITY_LEVEL_GREAT)
-					recovery_prob += 0.2
-				if(SANITY_LEVEL_NEUTRAL)
-					recovery_prob += 0.1
-				if(SANITY_LEVEL_DISTURBED)
-					recovery_prob += 0
-				if(SANITY_LEVEL_UNSTABLE)
-					recovery_prob += 0
-				if(SANITY_LEVEL_CRAZY)
-					recovery_prob += -0.1
-				if(SANITY_LEVEL_INSANE)
-					recovery_prob += -0.2
-
-	if(affected_mob.satiety > 0 && HAS_TRAIT(affected_mob, TRAIT_KNOCKEDOUT) && !disease_flags & CHRONIC || disease_flags & CURABLE)
-		var/turf/rest_turf = get_turf(affected_mob)
-		var/is_sleeping_in_darkness = rest_turf.get_lumcount() <= LIGHTING_TILE_IS_DARK
-
-		if(affected_mob.is_blind_from(EYES_COVERED) || is_sleeping_in_darkness)
-			recovery_prob += 0.1
-
-		// sleeping in silence is always better
-		if(HAS_TRAIT(affected_mob, TRAIT_DEAF))
-			recovery_prob += 0.1
-
-		// check for beds
-		if((locate(/obj/structure/bed) in affected_mob.loc))
-			recovery_prob += 0.2
-		else if((locate(/obj/structure/table) in affected_mob.loc))
-			recovery_prob += 0.1
-
-		// don't forget the bedsheet
-		if(locate(/obj/item/bedsheet) in affected_mob.loc)
-			recovery_prob += 0.1
-
-		// you forgot the pillow
-		if(locate(/obj/item/pillow) in affected_mob.loc)
-			recovery_prob += 0.1
-
-		recovery_prob += 0.2 //any form of sleeping helps a little bit
-
-	if(recovery_prob && !disease_flags & CHRONIC && disease_flags & CURABLE)
-		if(SPT_PROB(recovery_prob, seconds_per_tick))
-			if(stage == 1) //if we reduce FROM stage == 1, cure the virus
-				if(affected_mob.satiety < 0)
-					if(stage_peaked == FALSE) //if you didn't ride out the virus from its peak, if you're malnourished when it cures, you don't get resistance
-						cure(add_resistance = FALSE)
-					else if(prob(50)) //if you rode it out from the peak, coinflip on if you get resistance or not
-						cure(add_resistance = TRUE)
-				else
-					cure(add_resistance = TRUE) //stay fed and cure it at any point, you're immune
-			update_stage(max(stage - 1, 1))
+	if(SPT_PROB(stage_prob*slowdown, seconds_per_tick))
+		update_stage(min(stage + 1, max_stages))
 
 	return !carrier
 
@@ -201,7 +117,19 @@
 	if(!(spread_flags & DISEASE_SPREAD_AIRBORNE) && !force_spread)
 		return
 
-	if(HAS_TRAIT(affected_mob, TRAIT_VIRUS_RESISTANCE) || (affected_mob.satiety > 0 && prob(affected_mob.satiety/10)))
+	if(affected_mob.internal) //if you keep your internals on, no airborne spread at least
+		return
+
+	if(HAS_TRAIT(affected_mob, TRAIT_NOBREATH)) //also if you don't breathe
+		return
+
+	if(!has_required_infectious_organ(affected_mob, ORGAN_SLOT_LUNGS)) //also if you lack lungs
+		return
+
+	if(!affected_mob.CanSpreadAirborneDisease()) //should probably check this huh
+		return
+
+	if(HAS_TRAIT(affected_mob, TRAIT_VIRUS_RESISTANCE) || (affected_mob.satiety > 0 && prob(affected_mob.satiety/2))) //being full or on spaceacillin makes you less likely to spread a virus
 		return
 
 	var/spread_range = 2
@@ -234,6 +162,9 @@
 	if(affected_mob)
 		if(add_resistance && (disease_flags & CAN_RESIST))
 			LAZYOR(affected_mob.disease_resistances, GetDiseaseID())
+		if(affected_mob.ckey)
+			var/cure_turf = get_turf(affected_mob)
+			log_virus("[key_name(affected_mob)] was cured of virus: [src.admin_details()] at [loc_name(cure_turf)]")
 	qdel(src)
 
 /datum/disease/proc/IsSame(datum/disease/D)
