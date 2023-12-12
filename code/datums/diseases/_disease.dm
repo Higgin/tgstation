@@ -19,6 +19,16 @@
 	var/stage_prob = 2
 	/// How long this infection incubates (non-visible) before revealing itself
 	var/incubation_time
+	/// Has the virus hit its limit?
+	var/stage_peaked = FALSE
+	/// How many cycles has the virus been at its peak?
+	var/peaked_cycles = 0
+	/// How many cycles do we need to have been active after hitting our max stage to start rolling back?
+	var/cycles_to_beat = 0
+	/// Number of cycles we've prevented symptoms from appearing
+	var/symptom_offsets = 0
+	/// Number of cycles we've benefited from chemical or other non-resting symptom protection
+	var/chemical_offsets = 0
 
 	//Other
 	var/list/viable_mobtypes = list() //typepaths of viable mobs
@@ -99,7 +109,7 @@
 		switch(severity)
 			if(DISEASE_SEVERITY_POSITIVE) //good viruses don't go anywhere after hitting max stage - you can try to get rid of them by sleeping earlier
 				cycles_to_beat = max(DISEASE_RECOVERY_SCALING, DISEASE_CYCLES_POSITIVE) //because of the way we later check for recovery_prob, we need to floor this at least equal to the scaling to avoid infinitely getting less likely to cure
-				if((HAS_TRAIT(affected_mob, TRAIT_NOHUNGER)) || affected_mob.nutrition < NUTRITION_LEVEL_STARVING || affected_mob.satiety < 0 || slowdown == 1) //any sort of malnourishment/immunosuppressant opens you to losing a good virus
+				if(((HAS_TRAIT(affected_mob, TRAIT_NOHUNGER)) || ((affected_mob.nutrition > NUTRITION_LEVEL_STARVING) && (affected_mob.satiety >= 0))) && slowdown == 1) //any sort of malnourishment/immunosuppressant opens you to losing a good virus
 					return TRUE
 			if(DISEASE_SEVERITY_NONTHREAT)
 				cycles_to_beat = max(DISEASE_RECOVERY_SCALING, DISEASE_CYCLES_NONTHREAT)
